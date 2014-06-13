@@ -139,7 +139,7 @@ void feedReplicationBacklogWithObject(robj *o) {
     feedReplicationBacklog(p,len);
 }
 
-void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
+void replicationFeedSlavesWithOption(list *slaves, int dictid, robj **argv, int argc, int backlog) {
     listNode *ln;
     listIter li;
     int j, len;
@@ -170,7 +170,9 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
         }
 
         /* Add the SELECT command into the backlog. */
-        if (server.repl_backlog) feedReplicationBacklogWithObject(selectcmd);
+        if (server.repl_backlog && backlog) {
+            feedReplicationBacklogWithObject(selectcmd);
+        }
 
         /* Send it to slaves. */
         listRewind(slaves,&li);
@@ -185,7 +187,7 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
     server.slaveseldb = dictid;
 
     /* Write the command to the replication backlog if any. */
-    if (server.repl_backlog) {
+    if (server.repl_backlog && backlog) {
         char aux[REDIS_LONGSTR_SIZE+3];
 
         /* Add the multi bulk reply length. */
@@ -231,6 +233,10 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
         for (j = 0; j < argc; j++)
             addReplyBulk(slave,argv[j]);
     }
+}
+
+void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
+    replicationFeedSlavesWithOption(slaves, dictid, argv, argc, 1);
 }
 
 void replicationFeedMonitors(redisClient *c, list *monitors, int dictid, robj **argv, int argc) {
@@ -1805,7 +1811,7 @@ void replicationCron(void) {
 
         /* First, send PING */
         ping_argv[0] = createStringObject("PING",4);
-        replicationFeedSlaves(server.slaves, server.slaveseldb, ping_argv, 1);
+        replicationFeedSlavesWithOption(server.slaves, server.slaveseldb, ping_argv, 1, 0);
         decrRefCount(ping_argv[0]);
 
         /* Second, send a newline to all the slaves in pre-synchronization
