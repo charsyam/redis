@@ -210,6 +210,10 @@
 #define REDIS_RDB_ENC_INT32 2       /* 32 bit signed integer */
 #define REDIS_RDB_ENC_LZF 3         /* string compressed with FASTLZ */
 
+/* PSYNC With New Master states */
+#define REDIS_PSYNC_WITH_NEWMASTER_OFF 0
+#define REDIS_PSYNC_WITH_NEWMASTER_ON  1
+
 /* AOF states */
 #define REDIS_AOF_OFF 0             /* AOF is off */
 #define REDIS_AOF_ON 1              /* AOF is on */
@@ -748,6 +752,9 @@ struct redisServer {
     int syslog_facility;            /* Syslog facility */
     /* Replication (master) */
     int slaveseldb;                 /* Last SELECTed DB in replication output */
+    char psync_repl_runid[REDIS_RUN_ID_SIZE+1];
+    int psync_with_newmaster;
+    long long psync_repl_offset;
     long long master_repl_offset;   /* Global replication offset */
     int repl_ping_slave_period;     /* Master pings the slave every N seconds */
     char *repl_backlog;             /* Replication backlog for partial syncs */

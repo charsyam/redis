@@ -313,6 +313,14 @@ void loadServerConfigFromString(char *config) {
             server.hz = atoi(argv[1]);
             if (server.hz < REDIS_MIN_HZ) server.hz = REDIS_MIN_HZ;
             if (server.hz > REDIS_MAX_HZ) server.hz = REDIS_MAX_HZ;
+        } else if (!strcasecmp(argv[0],"psync-with-newmaster") && argc == 2) {
+            int yes;
+
+            if ((yes = yesnotoi(argv[1])) == -1) {
+                err = "argument must be 'yes' or 'no'"; goto loaderr;
+            }
+            server.psync_with_newmaster = yes ? REDIS_PSYNC_WITH_NEWMASTER_ON
+                                              : REDIS_PSYNC_WITH_NEWMASTER_OFF;
         } else if (!strcasecmp(argv[0],"appendonly") && argc == 2) {
             int yes;
 
@@ -681,6 +689,11 @@ void configSetCommand(redisClient *c) {
 
         if (yn == -1) goto badfmt;
         server.aof_no_fsync_on_rewrite = yn;
+    } else if (!strcasecmp(c->argv[2]->ptr,"psync-with-newmaster")) {
+        int yn = yesnotoi(o->ptr);
+
+        if (yn == -1) goto badfmt;
+        server.psync_with_newmaster = yn;
     } else if (!strcasecmp(c->argv[2]->ptr,"appendonly")) {
         int enable = yesnotoi(o->ptr);
 
@@ -1032,6 +1045,8 @@ void configGetCommand(redisClient *c) {
             server.repl_disable_tcp_nodelay);
     config_get_bool_field("aof-rewrite-incremental-fsync",
             server.aof_rewrite_incremental_fsync);
+    config_get_bool_field("psync-with-newmaster",
+            server.psync_with_newmaster);
 
     /* Everything we can't handle with macros follows. */
 
@@ -1769,6 +1784,8 @@ int rewriteConfig(char *path) {
         NULL, REDIS_DEFAULT_MAXMEMORY_POLICY);
     rewriteConfigNumericalOption(state,"maxmemory-samples",server.maxmemory_samples,REDIS_DEFAULT_MAXMEMORY_SAMPLES);
     rewriteConfigYesNoOption(state,"appendonly",server.aof_state != REDIS_AOF_OFF,0);
+    rewriteConfigYesNoOption(state,"psync-with-newmaster",
+        server.psync_with_newmaster != REDIS_PSYNC_WITH_NEWMASTER_OFF,0);
     rewriteConfigStringOption(state,"appendfilename",server.aof_filename,REDIS_DEFAULT_AOF_FILENAME);
     rewriteConfigEnumOption(state,"appendfsync",server.aof_fsync,
         "everysec", AOF_FSYNC_EVERYSEC,

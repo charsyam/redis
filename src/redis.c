@@ -1437,6 +1437,9 @@ void initServerConfig() {
     server.zset_max_ziplist_value = REDIS_ZSET_MAX_ZIPLIST_VALUE;
     server.hll_sparse_max_bytes = REDIS_DEFAULT_HLL_SPARSE_MAX_BYTES;
     server.shutdown_asap = 0;
+    server.psync_with_newmaster = REDIS_PSYNC_WITH_NEWMASTER_OFF;
+    server.psync_repl_runid[0] = '?';
+    server.psync_repl_offset = 0;
     server.repl_ping_slave_period = REDIS_REPL_PING_SLAVE_PERIOD;
     server.repl_timeout = REDIS_REPL_TIMEOUT;
     server.repl_min_slaves_to_write = REDIS_DEFAULT_MIN_SLAVES_TO_WRITE;
