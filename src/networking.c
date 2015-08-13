@@ -1198,12 +1198,17 @@ void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mask) {
         if (errno == EAGAIN) {
             return;
         } else {
-            redisLog(REDIS_VERBOSE, "Reading from client: %s",strerror(errno));
+            if (server.verbosity <= REDIS_VERBOSE) {
+                redisLog(REDIS_VERBOSE, "Reading from client(%s): %s", getClientPeerId(c), strerror(errno));
+            }
+
             freeClient(c);
             return;
         }
     } else if (nread == 0) {
-        redisLog(REDIS_VERBOSE, "Client closed connection");
+        if (server.verbosity <= REDIS_VERBOSE) {
+            redisLog(REDIS_VERBOSE, "Client(%s) closed connection", getClientPeerId(c));
+        }
         freeClient(c);
         return;
     }
