@@ -424,6 +424,10 @@ void loadServerConfigFromString(char *config) {
                 err = "argument must be 'no', 'always' or 'everysec'";
                 goto loaderr;
             }
+        } else if (!strcasecmp(argv[0],"aof-divide-size") && argc == 2) {
+            //Turn off aof_rewrite by setting aof_rewrite_perc as 0
+            server.aof_rewrite_perc = 0;
+            server.aof_divide_size = memtoll(argv[1],NULL);
         } else if (!strcasecmp(argv[0],"auto-aof-rewrite-percentage") &&
                    argc == 2)
         {
@@ -942,6 +946,8 @@ void configSetCommand(client *c) {
     } config_set_numerical_field(
       "timeout",server.maxidletime,0,LONG_MAX) {
     } config_set_numerical_field(
+      "aof-divide-size",server.aof_divide_size,0,LLONG_MAX){
+    } config_set_numerical_field(
       "auto-aof-rewrite-percentage",server.aof_rewrite_perc,0,LLONG_MAX){
     } config_set_numerical_field(
       "auto-aof-rewrite-min-size",server.aof_rewrite_min_size,0,LLONG_MAX) {
@@ -1106,6 +1112,8 @@ void configGetCommand(client *c) {
     config_get_numerical_field("maxmemory",server.maxmemory);
     config_get_numerical_field("maxmemory-samples",server.maxmemory_samples);
     config_get_numerical_field("timeout",server.maxidletime);
+    config_get_numerical_field("aof-divide-size",
+            server.aof_divide_size);
     config_get_numerical_field("auto-aof-rewrite-percentage",
             server.aof_rewrite_perc);
     config_get_numerical_field("auto-aof-rewrite-min-size",
@@ -1869,6 +1877,7 @@ int rewriteConfig(char *path) {
     rewriteConfigStringOption(state,"appendfilename",server.aof_filename,CONFIG_DEFAULT_AOF_FILENAME);
     rewriteConfigEnumOption(state,"appendfsync",server.aof_fsync,aof_fsync_enum,CONFIG_DEFAULT_AOF_FSYNC);
     rewriteConfigYesNoOption(state,"no-appendfsync-on-rewrite",server.aof_no_fsync_on_rewrite,CONFIG_DEFAULT_AOF_NO_FSYNC_ON_REWRITE);
+    rewriteConfigNumericalOption(state,"aof-divide-size",server.aof_divide_size,0);
     rewriteConfigNumericalOption(state,"auto-aof-rewrite-percentage",server.aof_rewrite_perc,AOF_REWRITE_PERC);
     rewriteConfigBytesOption(state,"auto-aof-rewrite-min-size",server.aof_rewrite_min_size,AOF_REWRITE_MIN_SIZE);
     rewriteConfigNumericalOption(state,"lua-time-limit",server.lua_time_limit,LUA_SCRIPT_TIME_LIMIT);

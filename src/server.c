@@ -1498,6 +1498,8 @@ void initServerConfig(void) {
     server.aof_rewrite_min_size = AOF_REWRITE_MIN_SIZE;
     server.aof_rewrite_base_size = 0;
     server.aof_rewrite_scheduled = 0;
+    server.aof_divide_size = 0;
+    server.aof_divide_count = 0;
     server.aof_last_fsync = time(NULL);
     server.aof_rewrite_time_last = -1;
     server.aof_rewrite_time_start = -1;
@@ -1981,8 +1983,7 @@ void initServer(void) {
 
     /* Open the AOF file if needed. */
     if (server.aof_state == AOF_ON) {
-        server.aof_fd = open(server.aof_filename,
-                               O_WRONLY|O_APPEND|O_CREAT,0644);
+        server.aof_fd = aofNextAOFHandle();
         if (server.aof_fd == -1) {
             serverLog(LL_WARNING, "Can't open the append-only file: %s",
                 strerror(errno));
