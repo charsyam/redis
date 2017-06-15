@@ -462,6 +462,17 @@ void existsCommand(client *c) {
     addReplyLongLong(c,count);
 }
 
+void setreploffsetCommand(client *c) {
+    long long reploff; 
+
+    if (getLongLongFromObjectOrReply(c, c->argv[1], &reploff,
+        "invalid replication offset") != C_OK)
+        return;
+
+    server.replication_offset = reploff;
+    addReply(c,shared.ok);
+}
+
 void selectCommand(client *c) {
     long id;
 

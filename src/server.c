@@ -219,6 +219,7 @@ struct redisCommand redisCommandTable[] = {
     {"msetnx",msetnxCommand,-3,"wm",0,NULL,1,-1,2,0,0},
     {"randomkey",randomkeyCommand,1,"rR",0,NULL,0,0,0,0,0},
     {"select",selectCommand,2,"lF",0,NULL,0,0,0,0,0},
+    {"setreploffset",setreploffsetCommand,2,"lF",0,NULL,0,0,0,0,0},
     {"swapdb",swapdbCommand,3,"wF",0,NULL,0,0,0,0,0},
     {"move",moveCommand,3,"wF",0,NULL,1,1,1,0,0},
     {"rename",renameCommand,3,"w",0,NULL,1,2,1,0,0},
@@ -1321,6 +1322,7 @@ void initServerConfig(void) {
     clearReplicationId2();
     server.configfile = NULL;
     server.executable = NULL;
+    server.replication_offset = 0;
     server.hz = CONFIG_DEFAULT_HZ;
     server.arch_bits = (sizeof(long) == 8) ? 64 : 32;
     server.port = CONFIG_DEFAULT_SERVER_PORT;
@@ -1491,6 +1493,8 @@ void initServerConfig(void) {
     server.assert_line = 0;
     server.bug_report_start = 0;
     server.watchdog_period = 0;
+
+    createReplicationBacklog();
 }
 
 extern char **environ;
@@ -2277,6 +2281,24 @@ int processCommand(client *c) {
             c->cmd->name);
         return C_OK;
     }
+
+    if (c->flags & CLIENT_MASTER) {
+        if (server.master) {
+            serverLog(LL_NOTICE,
+                "Master Repl Off: %lld.", server.master->reploff);
+        }
+
+        if (strcasecmp(c->argv[0]->ptr, "ping") != 0) {
+            sds buf;
+            int buflen;
+            buf = commandToString(c->cmd, 0, NULL, c->argv, c->argc);
+            buflen = sdslen(buf);
+
+            replicationFeedSlavesFromMasterStream(server.slaves, buf, buflen);
+            sdsfree(buf);
+        }
+    }
+
 
     /* Check if the user is authenticated */
     if (server.requirepass && !c->authenticated && c->cmd->proc != authCommand)

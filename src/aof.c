@@ -508,6 +508,16 @@ sds catAppendOnlyExpireAtCommand(sds buf, struct redisCommand *cmd, robj *key, r
     return buf;
 }
 
+sds filterNewAof(sds buf) {
+    sds newbuf = sdsempty();
+    char tmpBuf[64];
+    snprintf(tmpBuf, sizeof(tmpBuf)-1, "%lld", server.master_repl_offset);
+
+    newbuf = sdscatprintf(newbuf,"*2\r\n$13\r\nSETREPLOFFSET\r\n$%lu\r\n%s\r\n%s",
+            (unsigned long)strlen(tmpBuf), tmpBuf, buf);
+    return newbuf;
+}
+
 void feedAppendOnlyFile(struct redisCommand *cmd, int dictid, robj **argv, int argc) {
     sds buf = sdsempty();
     robj *tmpargv[3];
@@ -545,15 +555,19 @@ void feedAppendOnlyFile(struct redisCommand *cmd, int dictid, robj **argv, int a
     /* Append to the AOF buffer. This will be flushed on disk just before
      * of re-entering the event loop, so before the client will get a
      * positive reply about the operation performed. */
-    if (server.aof_state == AOF_ON)
-        server.aof_buf = sdscatlen(server.aof_buf,buf,sdslen(buf));
+    if (server.aof_state == AOF_ON) {
+        sds newbuf = filterNewAof(buf);
+        server.aof_buf = sdscatlen(server.aof_buf,newbuf,sdslen(newbuf));
+        sdsfree(newbuf);
+    }
 
     /* If a background append only file rewriting is in progress we want to
      * accumulate the differences between the child DB and the current one
      * in a buffer, so that when the child process will do its work we
      * can append the differences to the new append only file. */
-    if (server.aof_child_pid != -1)
+    if (server.aof_child_pid != -1) {
         aofRewriteBufferAppend((unsigned char*)buf,sdslen(buf));
+    }
 
     sdsfree(buf);
 }

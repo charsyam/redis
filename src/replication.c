@@ -127,6 +127,15 @@ void feedReplicationBacklog(void *ptr, size_t len) {
     unsigned char *p = ptr;
 
     server.master_repl_offset += len;
+    serverLog(LL_NOTICE,
+        "Master Repl Data : %s, %zu.", ptr, len);
+    serverLog(LL_NOTICE,
+        "Master Repl Offset %lld.", server.master_repl_offset);
+
+    if (server.master) {
+        serverLog(LL_NOTICE,
+            "Master Repl Off: %lld.", server.master->reploff);
+    }
 
     /* This is a circular buffer, so write as much data we can at every
      * iteration and rewind the "idx" index if we reach the limit. */
@@ -163,6 +172,68 @@ void feedReplicationBacklogWithObject(robj *o) {
         p = o->ptr;
     }
     feedReplicationBacklog(p,len);
+}
+
+sds commandToString(struct redisCommand *cmd, int dbid, int *pdbid, robj **argv, int argc) {
+    sds buf = sdsempty();
+    robj *tmpargv[3];
+
+    if (pdbid != NULL && dbid != *pdbid) {
+        char seldb[64];
+
+        snprintf(seldb,sizeof(seldb),"%d",dbid);
+        buf = sdscatprintf(buf,"*2\r\n$6\r\nSELECT\r\n$%lu\r\n%s\r\n",
+            (unsigned long)strlen(seldb),seldb);
+
+        *pdbid = dbid;
+    }
+
+    if (cmd->proc == expireCommand || cmd->proc == pexpireCommand ||
+        cmd->proc == expireatCommand) {
+        /* Translate EXPIRE/PEXPIRE/EXPIREAT into PEXPIREAT */
+        buf = catAppendOnlyExpireAtCommand(buf,cmd,argv[1],argv[2]);
+    } else if (cmd->proc == setexCommand || cmd->proc == psetexCommand) {
+        /* Translate SETEX/PSETEX to SET and PEXPIREAT */
+        tmpargv[0] = createStringObject("SET",3);
+        tmpargv[1] = argv[1];
+        tmpargv[2] = argv[3];
+        buf = catAppendOnlyGenericCommand(buf,3,tmpargv);
+        decrRefCount(tmpargv[0]);
+        buf = catAppendOnlyExpireAtCommand(buf,cmd,argv[1],argv[2]);
+    } else {
+        /* All the other commands don't need translation or need the
+         * same translation already operated in the command vector
+         * for the replication itself. */
+        buf = catAppendOnlyGenericCommand(buf,argc,argv);
+    }
+
+    return buf;
+}
+
+void sendAll(list *slaves, robj **argv, int argc) {
+    listNode *ln;
+    listIter li;
+    int j;
+
+    listRewind(slaves,&li);
+    while((ln = listNext(&li))) {
+        client *slave = ln->value;
+
+        /* Don't feed slaves that are still waiting for BGSAVE to start */
+        if (slave->replstate == SLAVE_STATE_WAIT_BGSAVE_START) continue;
+
+        /* Feed slaves that are waiting for the initial SYNC (so these commands
+         * are queued in the output buffer until the initial SYNC completes),
+         * or are already in sync with the master. */
+
+        /* Add the multi bulk length. */
+        addReplyMultiBulkLen(slave,argc);
+
+        /* Finally any additional argument that was not stored inside the
+         * static buffer if any (from j to argc). */
+        for (j = 0; j < argc; j++)
+            addReplyBulk(slave,argv[j]);
+    }
 }
 
 /* Propagate write commands to slaves, and populate the replication backlog
@@ -250,26 +321,7 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
         }
     }
 
-    /* Write the command to every slave. */
-    listRewind(slaves,&li);
-    while((ln = listNext(&li))) {
-        client *slave = ln->value;
-
-        /* Don't feed slaves that are still waiting for BGSAVE to start */
-        if (slave->replstate == SLAVE_STATE_WAIT_BGSAVE_START) continue;
-
-        /* Feed slaves that are waiting for the initial SYNC (so these commands
-         * are queued in the output buffer until the initial SYNC completes),
-         * or are already in sync with the master. */
-
-        /* Add the multi bulk length. */
-        addReplyMultiBulkLen(slave,argc);
-
-        /* Finally any additional argument that was not stored inside the
-         * static buffer if any (from j to argc). */
-        for (j = 0; j < argc; j++)
-            addReplyBulk(slave,argv[j]);
-    }
+    sendAll(slaves, argv, argc);
 }
 
 /* This function is used in order to proxy what we receive from our master
@@ -462,11 +514,12 @@ int masterTryPartialResynchronization(client *c) {
      *
      * Note that there are two potentially valid replication IDs: the ID1
      * and the ID2. The ID2 however is only valid up to a specific offset. */
+    /* Ignore replid */
+    /*
     if (strcasecmp(master_replid, server.replid) &&
         (strcasecmp(master_replid, server.replid2) ||
          psync_offset > server.second_replid_offset))
     {
-        /* Run id "?" is used by slaves that want to force a full resync. */
         if (master_replid[0] != '?') {
             if (strcasecmp(master_replid, server.replid) &&
                 strcasecmp(master_replid, server.replid2))
@@ -486,7 +539,7 @@ int masterTryPartialResynchronization(client *c) {
         }
         goto need_full_resync;
     }
-
+    */
     /* We still have the data our slave is asking for? */
     if (!server.repl_backlog ||
         psync_offset < server.repl_backlog_off ||
@@ -1435,6 +1488,8 @@ int slaveTryPartialResynchronization(int fd, int read_reply) {
             memcpy(psync_offset,"-1",3);
         }
 
+        snprintf(psync_offset,sizeof(psync_offset),"%lld", server.master_repl_offset+1);
+        
         /* Issue the PSYNC command */
         reply = sendSynchronousCommand(SYNC_CMD_WRITE,fd,"PSYNC",psync_replid,psync_offset,NULL);
         if (reply != NULL) {
@@ -2527,8 +2582,7 @@ void replicationCron(void) {
         listLength(server.slaves))
     {
         ping_argv[0] = createStringObject("PING",4);
-        replicationFeedSlaves(server.slaves, server.slaveseldb,
-            ping_argv, 1);
+        sendAll(server.slaves, ping_argv, 1);
         decrRefCount(ping_argv[0]);
     }
 
