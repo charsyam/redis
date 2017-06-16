@@ -2285,10 +2285,10 @@ int processCommand(client *c) {
     }
 
     if (c->flags & CLIENT_MASTER) {
-        if (server.master) {
-            serverLog(LL_NOTICE,
-                "Master Repl Off: %lld.", server.master->reploff);
-        }
+//        if (server.master) {
+//            serverLog(LL_NOTICE,
+//                "Master Repl Off: %lld.", server.master->reploff);
+//        }
 
         if (strcasecmp(c->argv[0]->ptr, "ping") != 0) {
             sds buf;
