@@ -3089,8 +3089,10 @@ sds genRedisInfoString(char *section) {
         if (sections++) info = sdscat(info,"\r\n");
         info = sdscatprintf(info,
             "# Replication\r\n"
-            "role:%s\r\n",
-            server.masterhost == NULL ? "master" : "slave");
+            "role:%s\r\n"
+            "current_replication_offset:%lld\r\n",
+            server.masterhost == NULL ? "master" : "slave",
+            server.master_repl_offset);
         if (server.masterhost) {
             long long slave_repl_offset = 1;
 
@@ -3105,8 +3107,7 @@ sds genRedisInfoString(char *section) {
                 "master_link_status:%s\r\n"
                 "master_last_io_seconds_ago:%d\r\n"
                 "master_sync_in_progress:%d\r\n"
-                "slave_repl_offset:%lld\r\n"
-                "current_replication_offset:%lld\r\n",
+                "slave_repl_offset:%lld\r\n",
                 server.masterhost,
                 server.masterport,
                 (server.repl_state == REPL_STATE_CONNECTED) ?
@@ -3114,8 +3115,7 @@ sds genRedisInfoString(char *section) {
                 server.master ?
                 ((int)(server.unixtime-server.master->lastinteraction)) : -1,
                 server.repl_state == REPL_STATE_TRANSFER,
-                slave_repl_offset,
-                server.master_repl_offset
+                slave_repl_offset
             );
 
             if (server.repl_state == REPL_STATE_TRANSFER) {
