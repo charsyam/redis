@@ -127,6 +127,7 @@ void feedReplicationBacklog(void *ptr, size_t len) {
     unsigned char *p = ptr;
 
     server.master_repl_offset += len;
+/*
     serverLog(LL_NOTICE,
         "Master Repl Data : %s, %zu.", ptr, len);
     serverLog(LL_NOTICE,
@@ -136,7 +137,7 @@ void feedReplicationBacklog(void *ptr, size_t len) {
         serverLog(LL_NOTICE,
             "Master Repl Off: %lld.", server.master->reploff);
     }
-
+*/
     /* This is a circular buffer, so write as much data we can at every
      * iteration and rewind the "idx" index if we reach the limit. */
     while(len) {
