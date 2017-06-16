@@ -498,7 +498,7 @@ int replicationSetupSlaveForFullResync(client *slave, long long offset) {
  * with the usual full resync. */
 int masterTryPartialResynchronization(client *c) {
     long long psync_offset, psync_len;
-    char *master_replid = c->argv[1]->ptr;
+    //char *master_replid = c->argv[1]->ptr;
     char buf[128];
     int buflen;
 
@@ -507,6 +507,9 @@ int masterTryPartialResynchronization(client *c) {
      * it in a robust way compared to aborting. */
     if (getLongLongFromObjectOrReply(c,c->argv[2],&psync_offset,NULL) !=
        C_OK) goto need_full_resync;
+
+    serverLog(LL_NOTICE,
+            "Requested Psync Offset: %lld, Current Replication Offset: %lld).", psync_offset, server.repl_backlog_off);
 
     /* Is the replication ID of this master the same advertised by the wannabe
      * slave via PSYNC? If the replication ID changed this master has a
@@ -1489,6 +1492,7 @@ int slaveTryPartialResynchronization(int fd, int read_reply) {
         }
 
         snprintf(psync_offset,sizeof(psync_offset),"%lld", server.master_repl_offset+1);
+        serverLog(LL_NOTICE,"Send PSYNC with replication offset %s", psync_offset);
         
         /* Issue the PSYNC command */
         reply = sendSynchronousCommand(SYNC_CMD_WRITE,fd,"PSYNC",psync_replid,psync_offset,NULL);
