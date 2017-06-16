@@ -206,7 +206,7 @@ void aof_background_fsync(int fd) {
 int aofNextAOFHandle(void) {
     char new_aof_filename[4096];
     server.aof_divide_count++;
-    snprintf(new_aof_filename, 4095, "%s.%lld", server.aof_filename, 
+    snprintf(new_aof_filename, 4095, "%s.%d", server.aof_filename, 
         server.aof_divide_count);
 
     serverLog(LL_NOTICE,"Divide AppendOnly File: %s", new_aof_filename);
