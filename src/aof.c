@@ -42,6 +42,7 @@
 
 void aofUpdateCurrentSize(void);
 void aofClosePipes(void);
+int aofNextAOFHandle(void);
 
 /* ----------------------------------------------------------------------------
  * AOF rewrite buffer implementation.
@@ -202,6 +203,20 @@ void aof_background_fsync(int fd) {
     bioCreateBackgroundJob(BIO_AOF_FSYNC,(void*)(long)fd,NULL,NULL);
 }
 
+int aofNextAOFHandle(void) {
+    char new_aof_filename[4096];
+    server.aof_divide_count++;
+    snprintf(new_aof_filename, 4095, "%s.%lld", server.aof_filename, 
+        server.aof_divide_count);
+
+    serverLog(LL_NOTICE,"Divide AppendOnly File: %s", new_aof_filename);
+    return open(new_aof_filename,O_WRONLY|O_APPEND|O_CREAT,0644);
+}
+
+void aof_background_close(int fd) {
+    bioCreateBackgroundJob(BIO_CLOSE_FILE,(void*)(long)fd,NULL,NULL);
+}
+
 /* Called when the user switches from "appendonly yes" to "appendonly no"
  * at runtime using the CONFIG command. */
 void stopAppendOnly(void) {
@@ -320,6 +335,24 @@ void flushAppendOnlyFile(int force) {
      * While this will save us against the server being killed I don't think
      * there is much to do about the whole server stopping for power problems
      * or alike */
+
+    if (server.aof_divide_size != 0 && server.aof_current_size >= server.aof_divide_size) {
+        char new_aof_filename[4096];
+        int new_fd = aofNextAOFHandle();
+        if (new_fd == -1) {
+            serverLog(LL_WARNING, "Can't create the append-only file(%s): %s",
+                new_aof_filename, strerror(errno));
+        } else {
+            int old_fd = server.aof_fd;
+            if (server.aof_fsync == AOF_FSYNC_ALWAYS) {
+                close(old_fd);
+            } else {
+                aof_background_close(old_fd);
+            }
+            server.aof_fd = new_fd;
+            server.aof_current_size = 0;
+        }
+    }
 
     latencyStartMonitor(latency);
     nwritten = write(server.aof_fd,server.aof_buf,sdslen(server.aof_buf));
@@ -634,7 +667,7 @@ int loadAppendOnlyFile(char *filename) {
 
     if (fp == NULL) {
         serverLog(LL_WARNING,"Fatal error: can't open the append log file for reading: %s",strerror(errno));
-        exit(1);
+        return C_ERR;
     }
 
     /* Handle a zero-length AOF file as a special case. An emtpy AOF file
@@ -1551,7 +1584,9 @@ void backgroundRewriteDoneHandler(int exitcode, int bysignal) {
             server.aof_state = AOF_ON;
 
         /* Asynchronously close the overwritten AOF. */
-        if (oldfd != -1) bioCreateBackgroundJob(BIO_CLOSE_FILE,(void*)(long)oldfd,NULL,NULL);
+        if (oldfd != -1) {
+            aof_background_close(oldfd);
+        }
 
         serverLog(LL_VERBOSE,
             "Background AOF rewrite signal handler took %lldus", ustime()-now);
