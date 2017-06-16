@@ -3092,7 +3092,7 @@ sds genRedisInfoString(char *section) {
             "role:%s\r\n"
             "current_replication_offset:%lld\r\n",
             server.masterhost == NULL ? "master" : "slave",
-            server.master_repl_offset);
+            server.replication_offset);
         if (server.masterhost) {
             long long slave_repl_offset = 1;
 
