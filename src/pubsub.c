@@ -337,7 +337,6 @@ int pubsubPublishMessage(robj *channel, robj *message) {
 
 /* SUBSCRIBE channel [channel ...] */
 void subscribeCommand(client *c) {
-    int j;
     if ((c->flags & CLIENT_DENY_BLOCKING) && !(c->flags & CLIENT_MULTI)) {
         /**
          * A client that has CLIENT_DENY_BLOCKING flag on
@@ -350,7 +349,7 @@ void subscribeCommand(client *c) {
         return;
     }
 
-    for (j = 1; j < c->argc; j++)
+    for (int j = 1; j < c->argc; j++)
         pubsubSubscribeChannel(c,c->argv[j]);
     c->flags |= CLIENT_PUBSUB;
 }
