@@ -35,6 +35,10 @@
  * will return NULL. */
 #define STREAM_LISTPACK_MAX_SIZE (1<<30)
 
+/* Compact only when the node has more than this many physical entries. */
+#define STREAM_LISTPACK_GC_MIN_ENTRIES 10
+#define STREAM_LISTPACK_GC_LIVE_DIVISOR 2
+
 void streamFreeCGGeneric(void *cg, void *s);
 void streamFreeNACK(stream *s, streamNACK *na);
 size_t streamReplyWithRangeFromConsumerPEL(client *c, stream *s, streamID *start, streamID *end, size_t count, streamCG *group, streamConsumer *consumer, long long maxsize, size_t emitted_before);
@@ -483,6 +487,17 @@ void streamGetEdgeID(stream *s, int first, int skip_tombstones, streamID *edge_i
     streamIteratorStop(&si);
 }
 
+/* Return the number of listpack elements in an entry, excluding the trailing
+ * lp-count element itself. */
+static int64_t streamListpackEntryCount(int64_t flags, int64_t numfields) {
+    int64_t lp_count = numfields + 3; /* flags + ms-diff + seq-diff. */
+    if (!(flags & STREAM_ITEM_FLAG_SAMEFIELDS)) {
+        /* Non-compressed entries also store each field and num-fields. */
+        lp_count += numfields+1;
+    }
+    return lp_count;
+}
+
 /* Adds a new item into the stream 's' having the specified number of
  * field-value pairs as specified in 'numfields' and stored into 'argv'.
  * Returns the new entry ID populating the 'added_id' structure.
@@ -734,14 +749,7 @@ int streamAppendItem(stream *s, robj **argv, int64_t numfields, streamID *added_
         lp = lpAppend(lp,(unsigned char*)value,sdslen(value));
     }
     /* Compute and store the lp-count field. */
-    int64_t lp_count = numfields;
-    lp_count += 3; /* Add the 3 fixed fields flags + ms-diff + seq-diff. */
-    if (!(flags & STREAM_ITEM_FLAG_SAMEFIELDS)) {
-        /* If the item is not compressed, it also has the fields other than
-         * the values, and an additional num-fields field. */
-        lp_count += numfields+1;
-    }
-    lp = lpAppendInteger(lp,lp_count);
+    lp = lpAppendInteger(lp,streamListpackEntryCount(flags,numfields));
     s->alloc_size -= oldsize;
     s->alloc_size += lpBytes(lp);
 
@@ -786,6 +794,74 @@ typedef struct {
 #define TRIM_STRATEGY_NONE 0
 #define TRIM_STRATEGY_MAXLEN 1
 #define TRIM_STRATEGY_MINID 2
+
+/* Rebuild a stream listpack without entries that were marked as deleted.
+ * The listpack header counters must be updated before calling this function. */
+static unsigned char *streamListpackCompact(unsigned char *lp) {
+    unsigned char *p = lpFirst(lp);
+    int64_t entries = lpGetInteger(p);
+    int64_t copied_entries = 0;
+    p = lpNext(lp,p); /* Skip entries count. */
+    p = lpNext(lp,p); /* Skip deleted entries count. */
+    int64_t master_fields_count = lpGetInteger(p);
+
+    unsigned char *new_lp = lpNew(lpBytes(lp));
+    new_lp = lpAppendInteger(new_lp,entries);
+    new_lp = lpAppendInteger(new_lp,0);
+    new_lp = lpAppendInteger(new_lp,master_fields_count);
+
+    p = lpNext(lp,p);
+    for (int64_t i = 0; i < master_fields_count; i++) {
+        unsigned int slen;
+        long long lval;
+        unsigned char *sval = lpGetValue(p,&slen,&lval);
+        new_lp = sval ? lpAppend(new_lp,sval,slen) : lpAppendInteger(new_lp,lval);
+        p = lpNext(lp,p);
+    }
+    new_lp = lpAppendInteger(new_lp,0);
+    p = lpNext(lp,p); /* Skip the master entry terminator. */
+
+    while (p) {
+        int64_t flags = lpGetInteger(p);
+        unsigned char *scan = lpNext(lp,p); /* Skip flags. */
+        scan = lpNext(lp,scan);             /* Skip ID ms delta. */
+        scan = lpNext(lp,scan);             /* Skip ID seq delta. */
+
+        int64_t numfields;
+        if (flags & STREAM_ITEM_FLAG_SAMEFIELDS) {
+            numfields = master_fields_count;
+        } else {
+            numfields = lpGetInteger(scan);
+        }
+        int64_t lp_count = streamListpackEntryCount(flags,numfields);
+
+        if (!(flags & STREAM_ITEM_FLAG_DELETED)) {
+            copied_entries++;
+            /* lp-count excludes its own element, so copy lp_count + 1. */
+            for (int64_t i = 0; i <= lp_count; i++) {
+                unsigned int slen;
+                long long lval;
+                unsigned char *sval = lpGetValue(p,&slen,&lval);
+                new_lp = sval ? lpAppend(new_lp,sval,slen) : lpAppendInteger(new_lp,lval);
+                p = lpNext(lp,p);
+            }
+        } else {
+            for (int64_t i = 0; i <= lp_count; i++) p = lpNext(lp,p);
+        }
+    }
+
+    /* Loaded listpacks are validated by streamValidateListpackIntegrity(), and
+     * both callers update the header before compaction. A mismatch therefore
+     * indicates an internal invariant violation rather than recoverable data. */
+    serverAssert(copied_entries == entries);
+    return lpShrinkToFit(new_lp);
+}
+
+static int streamListpackShouldCompact(int64_t entries, int64_t deleted) {
+    return server.stream_node_gc_enabled &&
+           entries + deleted > STREAM_LISTPACK_GC_MIN_ENTRIES &&
+           deleted > entries / STREAM_LISTPACK_GC_LIVE_DIVISOR;
+}
 
 typedef struct {
     int startidx; /* Starting index of IDs in argv */
@@ -1016,12 +1092,19 @@ int64_t streamTrim(stream *s, streamAddTrimArgs *args) {
         s->alloc_size -= oldsize;
         s->alloc_size += lpBytes(lp);
 
-        /* Here we should perform garbage collection in case at this point
-         * there are too many entries deleted inside the listpack. */
+        /* Reclaim the entries marked as deleted in case at this point there are
+         * too many of them inside the listpack. Note that we cannot just drop a
+         * leading range of elements here: with DELETE_STRATEGY_ACKED the loop
+         * above skips entries that are still referenced, so the tombstones are
+         * not necessarily a contiguous prefix. Rebuild the whole node instead. */
         entries -= deleted_from_lp;
         marked_deleted += deleted_from_lp;
-        if (entries + marked_deleted > 10 && marked_deleted > entries/2) {
-            /* TODO: perform a garbage collection. */
+        if (deleted_from_lp && streamListpackShouldCompact(entries,marked_deleted)) {
+            unsigned char *old_lp = lp;
+            lp = streamListpackCompact(lp);
+            s->alloc_size -= lpBytes(old_lp);
+            s->alloc_size += lpBytes(lp);
+            lpFree(old_lp);
         }
 
         /* Update the node with the new pointer. */
@@ -1600,16 +1683,26 @@ void streamIteratorRemoveEntry(streamIterator *si, streamID *current) {
         raxRemove(s->rax,si->ri.key,si->ri.key_len,NULL);
     } else {
         /* In the base case we alter the counters of valid/deleted entries. */
-        lp = lpReplaceInteger(lp,&p,aux-1);
+        int64_t entries = aux-1;
+        lp = lpReplaceInteger(lp,&p,entries);
         p = lpNext(lp,p); /* Seek deleted field. */
         aux = lpGetInteger(p);
-        lp = lpReplaceInteger(lp,&p,aux+1);
+        int64_t deleted = aux+1;
+        lp = lpReplaceInteger(lp,&p,deleted);
         s->alloc_size -= oldsize;
-        s->alloc_size += lpBytes(lp);
 
-        /* Update the listpack with the new pointer. */
-        if (si->lp != lp)
+        if (streamListpackShouldCompact(entries,deleted)) {
+            unsigned char *old_lp = lp;
+            lp = streamListpackCompact(lp);
+            lpFree(old_lp);
             raxInsert(s->rax,si->ri.key,si->ri.key_len,lp,NULL);
+            si->lp = lp;
+            si->ri.data = lp;
+        } else if (si->lp != lp) {
+            /* Update the listpack with the new pointer. */
+            raxInsert(s->rax,si->ri.key,si->ri.key_len,lp,NULL);
+        }
+        s->alloc_size += lpBytes(lp);
     }
 
     /* Update the number of entries counter. */
@@ -1626,9 +1719,6 @@ void streamIteratorRemoveEntry(streamIterator *si, streamID *current) {
     }
     streamIteratorStop(si);
     streamIteratorStart(si,s,&start,&end,si->rev);
-
-    /* TODO: perform a garbage collection here if the ratio between
-     * deleted and valid goes over a certain limit. */
 }
 
 /* Stop the stream iterator. The only cleanup we need is to free the rax
